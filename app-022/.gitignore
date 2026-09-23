@@ -1,0 +1,19 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 环境与密钥
+.env
+.env.*
+*.local
+
+# 业务导出目录（绝不提交学生数据）
+students/
+exports/
+*.pdf
+
+# 日志与杂项
+*.log
+.DS_Store
+
+# 注意：public/data/ 为离线笔顺数据，必须保留，不能忽略

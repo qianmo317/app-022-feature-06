@@ -1,0 +1,17 @@
+node_modules
+dist
+tests
+e2e
+playwright.config.ts
+.env
+.env.*
+*.log
+students
+exports
+*.pdf
+.git
+.gitignore
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md

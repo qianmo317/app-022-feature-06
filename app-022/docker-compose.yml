@@ -1,0 +1,8 @@
+services:
+  app-022:
+    build: .
+    image: app-022-feature-06:latest
+    container_name: app-022-feature-06
+    ports:
+      - "8152:80"
+    restart: unless-stopped
