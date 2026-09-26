@@ -57,8 +57,9 @@ test.describe('主流程', () => {
     await createWorksheet(page, '花木水');
     await clickCell(page, 0); // 第 1 行 = 花
     await expect(page.locator('[data-testid="char-panel"]')).toContainText('选中字：花');
-    // 笔顺播放器：花 7 画，出现 7 个步骤圆点
+    // 笔顺播放器：花 7 画，出现 7 个步骤圆点；先重置停住自动播放，再断言步骤指示
     await expect(page.locator('[data-testid="stroke-dot"]')).toHaveCount(7);
+    await page.click('[data-testid="player-reset"]');
     await expect(page.locator('[data-testid="player-step"]')).toContainText('1 / 7');
     await page.click('[data-testid="player-next"]');
     await expect(page.locator('[data-testid="player-step"]')).toContainText('2 / 7');
@@ -158,6 +159,8 @@ test.describe('主流程', () => {
     const id = await createWorksheet(page, '花木水');
     await page.goto(`/play/${id}`);
     await expect(page.locator('[data-testid="stroke-player"]')).toBeVisible();
+    // 先重置停住自动播放，再断言步骤指示（避免动画播完导致断言漂移）
+    await page.click('[data-testid="player-reset"]');
     await expect(page.locator('[data-testid="player-step"]')).toContainText('1 / 7');
     await page.click('[data-testid="play-next"]');
     await expect(page.locator('[data-testid="play-chars"] button.active')).toHaveText('木');

@@ -22,6 +22,8 @@ h1, h2, h3 { font-weight: 700; }
   font-size: 13px;
 }
 .btn:hover { border-color: #8a93a0; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:disabled:hover { border-color: #c3c9d1; }
 .btn.primary { background: #2f6fed; border-color: #2f6fed; color: #fff; }
 .btn.danger { color: #c0392b; border-color: #e0b4ae; }
 .btn.ghost { background: transparent; border-color: transparent; }
@@ -87,6 +89,48 @@ textarea { width: 100%; resize: vertical; }
 .field-row input[type="text"] { flex: 1; min-width: 0; }
 
 .preview-col { display: flex; flex-direction: column; min-width: 0; }
+
+/* ---------- 撤销/重做与编辑历史 ---------- */
+.hist { position: relative; display: flex; align-items: center; gap: 6px; }
+.hist-panel {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
+  width: 340px; max-height: 60vh; overflow-y: auto;
+  background: #fff; border: 1px solid #e3e7ec; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18); padding: 8px;
+}
+.hist-head { font-size: 12px; color: #6b7280; padding: 2px 6px 8px; }
+.hist-list { list-style: none; margin: 0; padding: 0; }
+.hist-list li { position: relative; display: flex; align-items: center; }
+.hist-list li > button {
+  flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; text-align: left;
+  background: none; border: none; padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; color: #1f2328; font-family: inherit;
+}
+.hist-list li > button:hover { background: #f3f5f8; }
+.hist-list li.current > button { background: #e8f0fe; }
+.hist-list li.undone > button { opacity: 0.45; }
+.hist-label { font-weight: 600; white-space: nowrap; }
+.hist-change { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6b7280; font-size: 12px; }
+.hist-time { color: #9ca3af; font-size: 11px; white-space: nowrap; }
+.hist-cur { color: #2f6fed; font-size: 11px; padding-right: 8px; white-space: nowrap; }
+/* 悬停某一步：前后对照浮层（fixed，不被面板滚动区裁剪） */
+.hist-tip {
+  position: fixed; z-index: 60;
+  width: 250px; padding: 10px 12px; border-radius: 8px;
+  background: #1f2328; color: #fff; font-size: 12px; line-height: 1.5;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.3); pointer-events: none;
+}
+.hist-tip-title { font-weight: 700; margin-bottom: 6px; }
+.hist-tip div { display: flex; gap: 8px; margin: 2px 0; word-break: break-all; }
+.hist-tip span { color: #9ca3af; flex-shrink: 0; }
+.hist-tip em { font-style: normal; }
+
+/* 底部提示条（历史栈清空等） */
+.toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 100;
+  background: #1f2328; color: #fff; padding: 10px 18px; border-radius: 8px;
+  font-size: 13px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.3);
+}
 .zoom-bar {
   display: flex; align-items: center; gap: 8px; padding: 8px 14px;
   background: #f3f5f8; border-bottom: 1px solid #e3e7ec; flex-wrap: wrap;

@@ -16,6 +16,7 @@
 - **模板库**：预置五套模板（一年级生字、古诗、姓名练字、ABC、拼音）
 - **离线笔顺数据**：`public/data/strokes.json` 内置 1096 个常用字（hanzi-writer-v1 格式，2.59MB），加载后完全离线可用
 - **本地保存**：编辑内容与配置存于 localStorage，刷新不丢失
+- **撤销 / 重做**：改版式、换字、删字、改标题、勾信息项、选多音字每步进历史栈（最多 50 步，满则丢最早）；可连续撤销、点列表跳回任意一步、重做回去，每步标注改的是哪一项/哪个字，鼠标悬停看改前改后对照；快捷键 `Ctrl/Cmd+Z`、`Ctrl/Cmd+Shift+Z`/`Ctrl/Cmd+Y`；导出到本机、切字帖、重新生成内容后栈清空并提示
 
 ## 技术栈
 
@@ -39,6 +40,7 @@ app-022/
 │   ├── lib/
 │   │   ├── paint.tsx             # 各种格子渲染 + 笔画分解绘制（SVG 单位制：1 unit = cellMm/100mm）
 │   │   ├── layout.ts             # 贪心分页（ROW_FACTOR=1.2，信息带 20 + 格 100 = 120 units/行）
+│   │   ├── history.ts            # 撤销/重做历史栈（每步前后对照 + 文档快照，上限 50）
 │   │   ├── templates.ts          # 5 套预置模板
 │   │   ├── exportImage.tsx       # renderToStaticMarkup 拼 SVG → 导出 SVG/PNG
 │   │   ├── pinyin.ts             # 拼音标注（含多音字）
@@ -51,8 +53,8 @@ app-022/
 │   ├── pages/                    # Home / Editor / PrintView / Library / Play
 │   ├── hooks.ts                  # useWorksheetDoc / isFormTarget
 │   ├── App.tsx / main.tsx / styles.css / types.ts
-├── tests/unit/                   # 31 个单元测试（layout/pinyin/strokes-data/data-import）
-├── e2e/                          # 24 个 Playwright E2E 用例（main-flow / print-and-perf）
+├── tests/unit/                   # 42 个单元测试（layout/history/pinyin/strokes-data/data-import）
+├── e2e/                          # 34 个 Playwright E2E 用例（main-flow / print-and-perf / history）
 ├── playwright.config.ts          # E2E 端口 4322（preview 服务器）
 ├── Dockerfile                    # node:20-alpine 构建 → nginx:1.27-alpine-slim 运行
 ├── nginx.conf                    # gzip / /healthz / 静态缓存策略 / SPA 回退
@@ -83,10 +85,10 @@ npm run gen:data     # 生成 public/data/strokes.json
 ## 测试
 
 ```bash
-# 单元测试（31 项：分页不拆字 / buildBlock 规则 / 笔顺数据完整性 / 拼音多音字 / 去重排序等）
+# 单元测试（42 项：分页不拆字 / buildBlock 规则 / 历史栈撤销重做 / 笔顺数据完整性 / 拼音多音字 / 去重排序等）
 npm test
 
-# E2E 测试（24 项：主流程 / 去重 / 导出 / 100 字分页 10 页 / 1:1 校验尺 / PDF 页数 / 性能 / healthz）
+# E2E 测试（34 项：主流程 / 去重 / 导出 / 撤销重做历史栈 / 100 字分页 10 页 / 1:1 校验尺 / PDF 页数 / 性能 / healthz）
 npx playwright install chromium   # 首次需要
 npm run e2e                       # 端口 4322，自动拉起 preview 服务器
 ```

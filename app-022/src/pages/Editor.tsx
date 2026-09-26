@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, JSX } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import type { Layout } from '../types';
+import type { Layout, Worksheet } from '../types';
 import {
   GRID_LABELS,
   STRUCTURE_LABELS,
@@ -15,12 +15,30 @@ import { parseInput } from '../lib/input';
 import { readingsOf } from '../lib/pinyin';
 import { charMetaOf, dataStats, importStrokes, strokeCountOf } from '../lib/data';
 import { saveWorksheet } from '../lib/storage';
+import {
+  HISTORY_LIMIT,
+  diffLayout,
+  fmtChars,
+  initHistory,
+  isCoalescable,
+  pushHistory,
+  snapshotAt,
+  snapshotOf,
+} from '../lib/history';
+import type { HistoryState, StepDesc } from '../lib/history';
 import { PageView } from '../components/PageView';
 import { StrokePlayer } from '../components/StrokePlayer';
 import { exportPng, exportSvg } from '../lib/exportImage';
 import { isFormTarget, useWorksheetDoc } from '../hooks';
 
 const PAGE_W_PX = 210 * (96 / 25.4); // 793.7
+
+/**
+ * 本 SPA 会话里上一份已加载字帖的 id。
+ * 编辑器在路由去首页/打印页时会卸载，组件内 ref 会随之销毁；
+ * 用模块级变量跨实例记忆，才能识别「从另一份字帖切过来」。
+ */
+let lastLoadedDocId: string | undefined;
 
 function NumField({
   label,
@@ -81,7 +99,7 @@ function RangeField({
   );
 }
 
-/** 编辑器：三栏（设置 | 预览 | 单字面板），自动保存，Ctrl+P 打印，←→ 切换选中字 */
+/** 编辑器：三栏（设置 | 预览 | 单字面板），自动保存，Ctrl+P 打印，←→ 切换选中字，Ctrl+Z/Y 撤销重做 */
 export default function Editor(): JSX.Element {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -94,7 +112,25 @@ export default function Editor(): JSX.Element {
   const [replaceText, setReplaceText] = useState('');
   const [dataVer, setDataVer] = useState(0);
   const [exportPage, setExportPage] = useState(0);
+  const [hist, setHist] = useState<HistoryState | null>(null);
+  const [histOpen, setHistOpen] = useState(false);
+  // 悬停某一步时的前后对照浮层（fixed 定位，避免被历史面板的滚动区裁剪）
+  const [tip, setTip] = useState<{ id: number; x: number; y: number } | null>(null);
+  // 撤销/重做目标：restore 只移动历史位置，文档与输入框由 effect 统一按目标快照恢复
+  const [histTarget, setHistTarget] = useState<number | null>(null);
+  const [toast, setToast] = useState('');
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+
+  /** 底部提示（历史栈被清空等），4s 自动消失 */
+  const showToast = (msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(''), 4000);
+  };
+  useEffect(() => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  }, []);
 
   // 进入编辑器时初始化输入框与选中字
   useEffect(() => {
@@ -104,6 +140,55 @@ export default function Editor(): JSX.Element {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws?.id]);
+
+  // 每份字帖各自一份历史栈：文档 id 变化（含首次加载）时以当前文档重置栈；
+  // 若本会话之前打开过另一份字帖（首页新建/模板库再进编辑器，组件已重新挂载），
+  // 同时给出「历史已清空」提示
+  const docId = ws?.id;
+  useEffect(() => {
+    if (!ws) return;
+    if (lastLoadedDocId && lastLoadedDocId !== ws.id) {
+      showToast('已切换到另一份字帖，撤销历史已清空');
+    }
+    lastLoadedDocId = ws.id;
+    setHist(initHistory(ws));
+    setHistTarget(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId]);
+
+  const restore = (index: number) => {
+    if (!hist) return;
+    setHistTarget(Math.max(0, Math.min(index, hist.entries.length)));
+  };
+  useEffect(() => {
+    if (histTarget === null || !hist || !ws) return;
+    const snap = snapshotAt(hist, histTarget);
+    setWs((w) => (w ? { ...w, ...snap } : w));
+    setHist({ ...hist, index: histTarget });
+    setText(snap.chars.join(' '));
+    setSelected((sel) => (snap.chars.includes(sel) ? sel : (snap.chars[0] ?? '')));
+    setHistTarget(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [histTarget]);
+  const canUndo = Boolean(hist && hist.index > 0);
+  const canRedo = Boolean(hist && hist.index < hist.entries.length);
+  const undo = () => hist && canUndo && restore(hist.index - 1);
+  const redo = () => hist && canRedo && restore(hist.index + 1);
+  useEffect(() => {
+    if (!histOpen) setTip(null);
+  }, [histOpen]);
+
+  // 点击预览区/页面空白处时收起历史面板（点其他控件按钮不收起，便于边操作边看栈）
+  useEffect(() => {
+    if (!histOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || t.closest('.hist') || t.closest('button') || t.closest('input') || t.closest('select') || t.closest('textarea') || t.closest('label')) return;
+      setHistOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [histOpen]);
 
   // 预览「适应」缩放
   useEffect(() => {
@@ -138,13 +223,27 @@ export default function Editor(): JSX.Element {
     setExportPage((p) => Math.min(p, Math.max(0, pageCount - 1)));
   }, [pageCount]);
 
-  // 全局键盘：Ctrl/Cmd+P → 打印视图；←→ 切换选中字（输入控件内除外）
+  // 全局键盘：Ctrl/Cmd+P → 打印视图；Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Shift+Z 或 Ctrl/Cmd+Y 重做；←→ 切换选中字（输入控件内除外）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault();
         navigate(`/worksheet/${id}/print?autoprint=1`);
         return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !isFormTarget(e)) {
+        const k = e.key.toLowerCase();
+        if (k === 'z') {
+          e.preventDefault();
+          if (e.shiftKey) redo();
+          else undo();
+          return;
+        }
+        if (k === 'y') {
+          e.preventDefault();
+          redo();
+          return;
+        }
       }
       if (isFormTarget(e) || !ws || ws.chars.length === 0) return;
       // 播放器聚焦时 ←→ 由播放器自行处理（逐笔），避免双重响应
@@ -159,7 +258,8 @@ export default function Editor(): JSX.Element {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [ws, selected, id, navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws, selected, id, navigate, hist]);
 
   if (notFound) return <Navigate to="/" replace />;
   if (!ws) return <div className="app-state">加载中…</div>;
@@ -173,22 +273,59 @@ export default function Editor(): JSX.Element {
   const stats = dataStats();
   const scale = zoom === 'fit' ? fitScale : zoom;
 
-  const updateLayout = (patch: Partial<Layout>) =>
-    setWs((w) => (w ? { ...w, layout: clampLayout({ ...w.layout, ...patch }) } : w));
+  /** 记录一步编辑：更新文档 + 入历史栈（记下改前/改后与改后快照） */
+  const commit = (next: Worksheet, step: StepDesc) => {
+    setWs(next);
+    setHist((h) => (h ? pushHistory(h, step, snapshotOf(next)) : h));
+  };
+
+  /** 版式修改：逐叶子对比；通常只有一项，联动修正（如改格宽夹紧每行格数）时合并记为一步 */
+  const updateLayout = (patch: Partial<Layout>) => {
+    const nextLayout = clampLayout({ ...layout, ...patch });
+    const changes = diffLayout(layout, nextLayout);
+    if (changes.length === 0) return;
+    const next = { ...ws, layout: nextLayout };
+    const step: StepDesc =
+      changes.length === 1
+        ? { ...changes[0], coalesce: isCoalescable(changes[0].label) }
+        : {
+            label: '版式调整',
+            before: changes.map((c) => `${c.label} ${c.before}`).join('；'),
+            after: changes.map((c) => `${c.label} ${c.after}`).join('；'),
+          };
+    commit(next, step);
+  };
+
+  /** 重新生成内容（改原文 / 改排序）：历史栈清空并提示 */
+  const regenerate = (next: Worksheet) => {
+    setWs(next);
+    setHistTarget(null);
+    if (hist && hist.entries.length > 0) showToast('内容已重新生成，撤销历史已清空');
+    setHist(initHistory(next));
+  };
 
   const onTextChange = (v: string, sortBy?: boolean) => {
     setText(v);
-    setWs((w) =>
-      w ? { ...w, chars: parseInput(v, { sortByStrokes: sortBy ?? w.sortByStrokes, strokeCountOf }) } : w,
+    regenerate({ ...ws, chars: parseInput(v, { sortByStrokes: sortBy ?? ws.sortByStrokes, strokeCountOf }) });
+  };
+
+  const onSortToggle = (v: boolean) => {
+    regenerate({ ...ws, sortByStrokes: v, chars: parseInput(text, { sortByStrokes: v, strokeCountOf }) });
+  };
+
+  const setPinyinChoice = (ch: string, idx: number) => {
+    const cur = ws.pinyinChoice?.[ch] ?? 0;
+    if (cur === idx) return;
+    const readings = readingsOf(ch);
+    commit(
+      { ...ws, pinyinChoice: { ...ws.pinyinChoice, [ch]: idx } },
+      { label: '拼音', char: ch, before: readings[cur] ?? '—', after: readings[idx] ?? '—' },
     );
   };
 
-  const setPinyinChoice = (ch: string, idx: number) =>
-    setWs((w) => (w ? { ...w, pinyinChoice: { ...w.pinyinChoice, [ch]: idx } } : w));
-
   const doReplace = () => {
     const to = [...replaceText][0];
-    if (!ws || !to || to === char) return;
+    if (!to || to === char) return;
     const idx = ws.chars.indexOf(char);
     if (idx < 0) return;
     const arr = [...ws.chars];
@@ -201,17 +338,32 @@ export default function Editor(): JSX.Element {
         chars.push(c);
       }
     }
-    setWs({ ...ws, chars });
+    commit({ ...ws, chars }, { label: '替换字', char, before: char, after: to });
     setText(chars.join(' '));
     setSelected(to);
     setReplaceText('');
   };
 
   const doDelete = () => {
-    if (!ws) return;
     const chars = ws.chars.filter((c) => c !== char);
-    setWs({ ...ws, chars });
+    commit({ ...ws, chars }, { label: '删除字', char, before: fmtChars(ws.chars), after: fmtChars(chars) });
     setText(chars.join(' '));
+  };
+
+  /** 导出到本机：历史栈清空并提示 */
+  const doExportSvg = () => {
+    exportSvg(ws, exportPage);
+    setHist(initHistory(ws));
+    showToast('已导出 SVG 到本机，撤销历史已清空');
+  };
+
+  const doExportPng = () => {
+    exportPng(ws, exportPage)
+      .then(() => {
+        setHist(initHistory(ws));
+        showToast('已导出 PNG 到本机，撤销历史已清空');
+      })
+      .catch((err: unknown) => showToast(`PNG 导出失败：${err instanceof Error ? err.message : String(err)}`));
   };
 
   const onImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -236,8 +388,47 @@ export default function Editor(): JSX.Element {
           className="title-input"
           data-testid="title-input"
           value={ws.title}
-          onChange={(e) => setWs((w) => (w ? { ...w, title: e.target.value } : w))}
+          onChange={(e) => commit({ ...ws, title: e.target.value }, { label: '标题', before: ws.title, after: e.target.value, coalesce: true })}
         />
+        <div className="hist">
+          <button className="btn" data-testid="undo-btn" disabled={!canUndo} onClick={undo} title="撤销（Ctrl/Cmd+Z）">↩ 撤销</button>
+          <button className="btn" data-testid="redo-btn" disabled={!canRedo} onClick={redo} title="重做（Ctrl/Cmd+Y）">↪ 重做</button>
+          <button
+            className={`btn ${histOpen ? 'active' : ''}`}
+            data-testid="history-toggle"
+            onClick={() => setHistOpen((v) => !v)}
+          >
+            历史 {hist?.entries.length ?? 0}/{HISTORY_LIMIT}
+          </button>
+          {histOpen && hist && (
+            <div className="hist-panel" data-testid="history-panel">
+              <div className="hist-head">每步记下改前/改后，点击可跳转到该步</div>
+              <ul className="hist-list">
+                <li className={hist.index === 0 ? 'current' : ''}>
+                  <button data-testid="history-base" onClick={() => restore(0)}>
+                    <span className="hist-label">{hist.truncated ? '栈底（更早的已丢弃）' : '初始状态'}</span>
+                  </button>
+                  {hist.index === 0 && <span className="hist-cur">当前</span>}
+                </li>
+                {hist.entries.map((e, i) => (
+                  <li
+                    key={e.id}
+                    className={`${i >= hist.index ? 'undone' : ''} ${i === hist.index - 1 ? 'current' : ''}`}
+                    onMouseEnter={(ev) => setTip({ id: e.id, x: ev.currentTarget.getBoundingClientRect().right + 12, y: ev.currentTarget.getBoundingClientRect().top })}
+                    onMouseLeave={() => setTip((t) => (t?.id === e.id ? null : t))}
+                  >
+                    <button data-testid="history-entry" onClick={() => restore(i + 1)}>
+                      <span className="hist-label">{e.label}{e.char ? ` · ${e.char}` : ''}</span>
+                      <span className="hist-change">{e.before} → {e.after}</span>
+                      <span className="hist-time">{new Date(e.time).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+                    </button>
+                    {i === hist.index - 1 && <span className="hist-cur">当前</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
         <div className="bar-actions">
           <Link className="btn" data-testid="print-link" to={`/worksheet/${id}/print?autoprint=1`}>打印</Link>
           <select data-testid="export-page" value={exportPage} onChange={(e) => setExportPage(Number(e.target.value))}>
@@ -245,8 +436,8 @@ export default function Editor(): JSX.Element {
               <option key={i} value={i}>第 {i + 1} 页</option>
             ))}
           </select>
-          <button className="btn" data-testid="export-svg" onClick={() => exportSvg(ws, exportPage)}>导出 SVG</button>
-          <button className="btn" data-testid="export-png" onClick={() => exportPng(ws, exportPage)}>导出 PNG</button>
+          <button className="btn" data-testid="export-svg" onClick={doExportSvg}>导出 SVG</button>
+          <button className="btn" data-testid="export-png" onClick={doExportPng}>导出 PNG</button>
         </div>
       </header>
 
@@ -267,11 +458,7 @@ export default function Editor(): JSX.Element {
               type="checkbox"
               data-testid="sort-strokes"
               checked={Boolean(ws.sortByStrokes)}
-              onChange={(e) => {
-                const v = e.target.checked;
-                setWs((w) => (w ? { ...w, sortByStrokes: v } : w));
-                onTextChange(text, v);
-              }}
+              onChange={(e) => onSortToggle(e.target.checked)}
             />
           </label>
 
@@ -436,6 +623,24 @@ export default function Editor(): JSX.Element {
           )}
         </aside>
       </div>
+
+      {tip && hist && (() => {
+        const e = hist.entries.find((x) => x.id === tip.id);
+        if (!e) return null;
+        const left = Math.min(tip.x, window.innerWidth - 268);
+        const top = Math.min(tip.y, window.innerHeight - 150);
+        return (
+          <div className="hist-tip" data-testid="history-tip" style={{ left, top }}>
+            <div className="hist-tip-title">{e.label}{e.char ? ` · ${e.char}` : ''}</div>
+            <div><span>改前</span><em>{e.before}</em></div>
+            <div><span>改后</span><em>{e.after}</em></div>
+          </div>
+        );
+      })()}
+
+      {toast && (
+        <div className="toast" data-testid="toast" role="status">{toast}</div>
+      )}
     </div>
   );
 }
